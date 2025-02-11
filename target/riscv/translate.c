@@ -1053,6 +1053,73 @@ static bool gen_arith(DisasContext *ctx, arg_r *a, DisasExtend ext,
     return true;
 }
 
+/*
+    The LD instruction loads a 64-bit value from memory into register rd for RV64I.
+    The LW instruction loads a 32-bit value from memory and sign-extends this to 64 bits before storing it
+    in register rd for RV64I. The LWU instruction, on the other hand, zero-extends the 32-bit value from
+    memory for RV64I. LH and LHU are defined analogously for 16-bit values, as are LB and LBU for 8-bit
+    values. The SD, SW, SH, and SB instructions store 64-bit, 32-bit, 16-bit, and 8-bit values from the low
+    bits of register rs2 to memory respectively.
+*/
+static void gen_mee_decrypt(DisasContext *ctx, int memop, TCGv dest, TCGv addr, TCGv ldval)
+{
+    assert(!(memop & MO_BSWAP));
+
+    switch (memop & (MO_SIZE|MO_SIGN))
+    {
+    case MO_UB:
+        gen_helper_mee_ld8u(dest, tcg_env, addr, dest, ldval);
+        break;
+    case MO_SB:
+        gen_helper_mee_ld8s(dest, tcg_env, addr, dest, ldval);
+        break;
+    case MO_UW:
+        gen_helper_mee_ld16u(dest, tcg_env, addr, dest, ldval);
+        break;
+    case MO_SW:
+        gen_helper_mee_ld16s(dest, tcg_env, addr, dest, ldval);
+        break;
+    case MO_UL:
+        gen_helper_mee_ld32u(dest, tcg_env, addr, dest, ldval);
+        break;
+    case MO_SL:
+        gen_helper_mee_ld32s(dest, tcg_env, addr, dest, ldval);
+        break;
+    case MO_UQ:
+    case MO_SQ:
+        gen_helper_mee_ld64(dest, tcg_env, addr, dest, ldval);
+        break;
+
+    default:
+        assert(0);
+        break;
+    }
+}
+static void gen_mee_encrypt(DisasContext *ctx, int memop, TCGv val, TCGv addr)
+{
+    assert(!(memop & MO_BSWAP));
+
+    switch (memop & (MO_SIZE))
+    {
+    case MO_64:
+        gen_helper_mee_st64(tcg_env, addr, val);
+        break;
+    case MO_32:
+        gen_helper_mee_st32(tcg_env, addr, val);
+        break;
+    case MO_16:
+        gen_helper_mee_st16(tcg_env, addr, val);
+        break;
+    case MO_8:
+        gen_helper_mee_st8(tcg_env, addr, val);
+        break;
+
+    default:
+        assert(0);
+        break;
+    }
+}
+
 static void gen_load_internal(DisasContext *ctx, int memop, TCGv t1, TCGv t0)
 {
     if (gen_mem_trace()) {

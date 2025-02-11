@@ -274,18 +274,22 @@ static bool trans_bgeu(DisasContext *ctx, arg_bgeu *a)
 
 static bool gen_load_tl(DisasContext *ctx, arg_lb *a, MemOp memop)
 {
-    TCGv dest = dest_gpr(ctx, a->rd);
+    TCGv dest_reg = dest_gpr(ctx, a->rd);
+    TCGv temp = tcg_temp_new();
     TCGv addr = get_address(ctx, a->rs1, a->imm);
 
-    tcg_gen_qemu_ld_tl(dest, addr, ctx->mem_idx, memop);
-    gen_load_internal(ctx, memop, dest, addr);
-    gen_set_gpr(ctx, a->rd, dest);
+    tcg_gen_qemu_ld_tl(temp, addr, ctx->mem_idx, memop);
+    gen_mee_decrypt(ctx, memop, dest_reg, addr, temp);
+    gen_load_internal(ctx, memop, dest_reg, addr);
+    gen_set_gpr(ctx, a->rd, dest_reg);
     return true;
 }
 
 /* Compute only 64-bit addresses to use the address translation mechanism */
 static bool gen_load_i128(DisasContext *ctx, arg_lb *a, MemOp memop)
 {
+    assert(0); // TODO
+
     TCGv src1l = get_gpr(ctx, a->rs1, EXT_NONE);
     TCGv destl = dest_gpr(ctx, a->rd);
     TCGv desth = dest_gprh(ctx, a->rd);
@@ -390,13 +394,16 @@ static bool gen_store_tl(DisasContext *ctx, arg_sb *a, MemOp memop)
         tcg_gen_mb(TCG_MO_ALL | TCG_BAR_STRL);
     }
 
-    tcg_gen_qemu_st_tl(data, addr, ctx->mem_idx, memop);
+    // tcg_gen_qemu_st_tl(data, addr, ctx->mem_idx, memop);
+    gen_mee_encrypt(ctx, memop, data, addr);
     gen_store_internal(ctx, memop, data, addr);
     return true;
 }
 
 static bool gen_store_i128(DisasContext *ctx, arg_sb *a, MemOp memop)
 {
+    assert(0); // TODO
+
     TCGv src1l = get_gpr(ctx, a->rs1, EXT_NONE);
     TCGv src2l = get_gpr(ctx, a->rs2, EXT_NONE);
     TCGv src2h = get_gprh(ctx, a->rs2);

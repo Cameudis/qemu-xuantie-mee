@@ -31,6 +31,136 @@
 #include "qemu/main-loop.h"
 #endif
 
+void helper_my_debug(CPURISCVState *env, target_ulong val1, target_ulong val2)
+{
+    printf("debug: 0x%lx, 0x%lx\n", val1, val2);
+    fflush(stdout);
+}
+
+#include "mee.h"
+
+static void* _helper_get_hptr(CPURISCVState *env, target_ulong addr, int size)
+{
+    void* hptr = tlb_vaddr_to_host(env, addr, 0, riscv_env_mmu_index(env, false));
+    if (!hptr) {
+        bool ret = riscv_cpu_tlb_fill((CPUState*)env_archcpu(env), addr, size, 0, riscv_env_mmu_index(env, false), false, 0);
+        assert(ret);
+    }
+    hptr = tlb_vaddr_to_host(env, addr, 0, riscv_env_mmu_index(env, false));
+    return hptr;
+}
+
+target_ulong helper_mee_ld8u(CPURISCVState *env, target_ulong addr, target_ulong orig_val, target_ulong ldval)
+{
+    uint8_t val;
+    void *hptr = _helper_get_hptr(env, addr, 1);
+
+    if (hptr) val = mee_load_ptr(hptr, 1);
+    // else val = cpu_ldub_data_ra(env, addr, GETPC());
+    else return ldval;
+
+    return (target_ulong)val;
+}
+target_ulong helper_mee_ld8s(CPURISCVState *env, target_ulong addr, target_ulong orig_val, target_ulong ldval)
+{
+    int8_t val;
+    void *hptr = _helper_get_hptr(env, addr, 1);
+    
+    if (hptr) val = mee_load_ptr(hptr, 1);
+    // else val = cpu_ldsb_data_ra(env, addr, GETPC());
+    else return ldval;
+
+    return (target_long)val;
+}
+target_ulong helper_mee_ld16u(CPURISCVState *env, target_ulong addr, target_ulong orig_val, target_ulong ldval)
+{
+    uint16_t val;
+    void *hptr = _helper_get_hptr(env, addr, 2);
+
+    if (hptr) val = mee_load_ptr(hptr, 2);
+    // else val = cpu_lduw_data_ra(env, addr, GETPC());
+    else return ldval;
+
+    return (target_ulong)val;
+}
+target_ulong helper_mee_ld16s(CPURISCVState *env, target_ulong addr, target_ulong orig_val, target_ulong ldval)
+{
+    int16_t val;
+    void *hptr = _helper_get_hptr(env, addr, 2);
+
+    if (hptr) val = mee_load_ptr(hptr, 2);
+    // else val = cpu_ldsw_data_ra(env, addr, GETPC());
+    else return ldval;
+
+    return (target_long)val;
+}
+target_ulong helper_mee_ld32u(CPURISCVState *env, target_ulong addr, target_ulong orig_val, target_ulong ldval)
+{
+    uint32_t val;
+    void *hptr = _helper_get_hptr(env, addr, 4);
+
+    if (hptr) val = mee_load_ptr(hptr, 4);
+    // else val = cpu_ldl_data_ra(env, addr, GETPC());
+    else return ldval;
+
+    return (target_ulong)val;
+}
+target_ulong helper_mee_ld32s(CPURISCVState *env, target_ulong addr, target_ulong orig_val, target_ulong ldval)
+{
+    int32_t val;
+    void *hptr = _helper_get_hptr(env, addr, 4);
+
+    if (hptr) val = mee_load_ptr(hptr, 4);
+    // else val = cpu_ldl_data_ra(env, addr, GETPC());
+    else return ldval;
+
+    return (target_long)val;
+}
+target_ulong helper_mee_ld64(CPURISCVState *env, target_ulong addr, target_ulong orig_val, target_ulong ldval)
+{
+    uint64_t val;
+    void *hptr = _helper_get_hptr(env, addr, 8);
+
+    if (hptr) val = mee_load_ptr(hptr, 8);
+    // else val = cpu_ldq_data_ra(env, addr, GETPC());
+    else return ldval;
+
+    return val;
+}
+
+// target_ulong helper_mee_decrypt(CPURISCVState *env, target_ulong val, target_ulong addr)
+// {
+//     void *hptr = tlb_vaddr_to_host(env, addr, 0, riscv_env_mmu_index(env, false)); // 0 for read, 1 for write, 2 for execute
+//     if (!hptr) return orig_val;
+//     // printf("[d] gva: 0x%lx, hva: %p, value: 0x%016lx\n", addr, hptr, val);
+//     return val;
+// }
+
+void helper_mee_st8(CPURISCVState *env, target_ulong addr, target_ulong val)
+{
+    void *hptr = _helper_get_hptr(env, addr, 1);
+    if (hptr) mee_store_ptr(hptr, val, 1);
+    else cpu_stb_data_ra(env, addr, val, GETPC());
+}
+void helper_mee_st16(CPURISCVState *env, target_ulong addr, target_ulong val)
+{
+    void *hptr = _helper_get_hptr(env, addr, 2);
+    if (hptr) mee_store_ptr(hptr, val, 2);
+    else cpu_stw_data_ra(env, addr, val, GETPC());
+}
+void helper_mee_st32(CPURISCVState *env, target_ulong addr, target_ulong val)
+{
+    void *hptr = _helper_get_hptr(env, addr, 4);
+    if (hptr) mee_store_ptr(hptr, val, 4);
+    else cpu_stl_data_ra(env, addr, val, GETPC());
+}
+void helper_mee_st64(CPURISCVState *env, target_ulong addr, target_ulong val)
+{
+    void *hptr = _helper_get_hptr(env, addr, 8);
+    if (hptr) mee_store_ptr(hptr, val, 8);
+    else cpu_stq_data_ra(env, addr, val, GETPC());
+}
+
 void helper_tb_trace(CPURISCVState *env, target_ulong tb_pc)
 {
     int trace_index = env->trace_index % TB_TRACE_NUM;

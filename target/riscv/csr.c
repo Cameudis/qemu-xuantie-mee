@@ -761,6 +761,11 @@ static RISCVException pmp(CPURISCVState *env, int csrno)
     return RISCV_EXCP_ILLEGAL_INST;
 }
 
+static RISCVException meexc(CPURISCVState *env, int csrno)
+{
+    return RISCV_EXCP_NONE;
+}
+
 static RISCVException have_mseccfg(CPURISCVState *env, int csrno)
 {
     if (riscv_cpu_cfg(env)->ext_smepmp) {
@@ -5408,6 +5413,28 @@ static RISCVException write_pmpaddr(CPURISCVState *env, int csrno,
     return RISCV_EXCP_NONE;
 }
 
+#include "mee.h"
+
+static RISCVException read_meexc(CPURISCVState *env, int csrno,
+                                   target_ulong *val)
+{
+    if (csrno == CSR_MEEXC_START) *val = meexc_start;
+    else if (csrno == CSR_MEEXC_LEN) *val = meexc_len;
+    else return RISCV_EXCP_ILLEGAL_INST;
+
+    return RISCV_EXCP_NONE;
+}
+
+static RISCVException write_meexc(CPURISCVState *env, int csrno,
+                                    target_ulong val)
+{
+    if (csrno == CSR_MEEXC_START) meexc_start = val;
+    else if (csrno == CSR_MEEXC_LEN) meexc_len = val;
+    else return RISCV_EXCP_ILLEGAL_INST;
+
+    return RISCV_EXCP_NONE;
+}
+
 static RISCVException read_mttp(CPURISCVState *env, int csrno,
                                    target_ulong *val)
 {
@@ -6979,6 +7006,10 @@ riscv_csr_operations csr_ops[CSR_TABLE_SIZE] = {
     [CSR_PMPADDR13]  = { "pmpaddr13", pmp, read_pmpaddr, write_pmpaddr },
     [CSR_PMPADDR14] =  { "pmpaddr14", pmp, read_pmpaddr, write_pmpaddr },
     [CSR_PMPADDR15] =  { "pmpaddr15", pmp, read_pmpaddr, write_pmpaddr },
+
+    /* MEE */
+    [CSR_MEEXC_START] = { "meexc_start", meexc, read_meexc, write_meexc },
+    [CSR_MEEXC_LEN] = { "meexc_len", meexc, read_meexc, write_meexc },
 
     /* Debug CSRs */
     [CSR_TSELECT]   =  { "tselect",  debug, read_tselect,  write_tselect  },

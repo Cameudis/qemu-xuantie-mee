@@ -111,7 +111,40 @@ static bool trans_sc_w(DisasContext *ctx, arg_sc_w *a)
 static bool trans_amoswap_w(DisasContext *ctx, arg_amoswap_w *a)
 {
     REQUIRE_A_OR_ZAAMO(ctx);
-    return gen_amo(ctx, a, &tcg_gen_atomic_xchg_tl, MO_TESL);
+    // return gen_amo(ctx, a, &tcg_gen_atomic_xchg_tl, MO_TESL);
+
+    TCGv src_rs2;
+    TCGv dest = dest_gpr(ctx, a->rd);
+    TCGv addr;
+    MemOp mop = MO_TESL;
+
+    if (ctx->cfg_ptr->ext_zama16b) {
+        mop |= MO_ATOM_WITHIN16;
+    } else {
+        mop |= MO_ALIGN;
+    }
+
+    decode_save_opc(ctx);
+    addr = get_address(ctx, a->rs1, 0);
+
+    // WARNING: not atomic!
+
+    src_rs2 = tcg_temp_new();
+    tcg_gen_mov_tl(src_rs2, get_gpr(ctx, a->rs2, EXT_NONE));
+    
+    // tcg_gen_qemu_ld_tl(temp, addr, ctx->mem_idx, mop);
+    gen_mee_decrypt(ctx, mop, dest, addr, src_rs2);
+
+    // gen_helper_my_debug(tcg_env, src_rs2, dest);
+
+    if (ctx->ztso) {
+        tcg_gen_mb(TCG_MO_ALL | TCG_BAR_STRL);
+    }
+
+    gen_mee_encrypt(ctx, mop, src_rs2, addr);
+    gen_set_gpr(ctx, a->rd, dest);
+
+    return true;
 }
 
 static bool trans_amoadd_w(DisasContext *ctx, arg_amoadd_w *a)

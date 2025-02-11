@@ -38,6 +38,8 @@
 #endif
 #include "exec/tracestub.h"
 
+#include "mee.h"
+
 /* CLIC hacking */
 #ifndef CONFIG_USER_ONLY
 bool riscv_cpu_local_irq_mode_enabled(CPURISCVState *env, int mode)
@@ -1229,8 +1231,8 @@ static int get_physical_address(CPURISCVState *env, hwaddr *physical,
      * correct, but the value visible to the exception handler
      * (riscv_cpu_do_interrupt) is correct
      */
-    MemTxResult res;
-    MemTxAttrs attrs = MEMTXATTRS_UNSPECIFIED;
+    // MemTxResult res;
+    // MemTxAttrs attrs = MEMTXATTRS_UNSPECIFIED;
     int mode = mmuidx_priv(mmu_idx);
     bool use_background = false;
     hwaddr ppn;
@@ -1398,14 +1400,16 @@ restart:
         }
 
         if (riscv_cpu_mxl(env) == MXL_RV32) {
-            pte = address_space_ldl(cs->as, pte_addr, attrs, &res);
+            // pte = address_space_ldl(cs->as, pte_addr, attrs, &res); // TODO
+            pte = mee_load_pa(env, pte_addr, 4);
         } else {
-            pte = address_space_ldq(cs->as, pte_addr, attrs, &res);
+            // pte = address_space_ldq(cs->as, pte_addr, attrs, &res); // TODO
+            pte = mee_load_pa(env, pte_addr, 8);
         }
 
-        if (res != MEMTX_OK) {
-            return TRANSLATE_FAIL;
-        }
+        // if (res != MEMTX_OK) {
+        //     return TRANSLATE_FAIL;
+        // }
 
         if (riscv_cpu_sxl(env) == MXL_RV32) {
             ppn = pte >> PTE_PPN_SHIFT;
@@ -1581,15 +1585,19 @@ restart:
         mr = address_space_translate(cs->as, pte_addr, &addr1, &l,
                                      false, MEMTXATTRS_UNSPECIFIED);
         if (memory_region_is_ram(mr)) {
-            target_ulong *pte_pa = qemu_map_ram_ptr(mr->ram_block, addr1);
+            // target_ulong *pte_pa = qemu_map_ram_ptr(mr->ram_block, addr1);
 #if TCG_OVERSIZED_GUEST
             /*
              * MTTCG is not enabled on oversized TCG guests so
              * page table updates do not need to be atomic
              */
-            *pte_pa = pte = updated_pte;
+            // *pte_pa = pte = updated_pte;
+            mee_store_pa(env, pte_addr, updated_pte, l);
+            pte = updated_pte;
 #else
-            target_ulong old_pte = qatomic_cmpxchg(pte_pa, pte, updated_pte);
+            // target_ulong old_pte = qatomic_cmpxchg(pte_pa, pte, updated_pte); // TODO
+            target_ulong old_pte = mee_load_pa(env, pte_addr, l);
+            mee_store_pa(env, pte_addr, updated_pte, l);
             if (old_pte != pte) {
                 goto restart;
             }

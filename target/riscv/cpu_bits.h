@@ -393,6 +393,10 @@
 #define CSR_PMPADDR14       0x3be
 #define CSR_PMPADDR15       0x3bf
 
+/* MEE */
+#define CSR_MEEXC_START     0x3c0
+#define CSR_MEEXC_LEN       0x3c1
+
 /* Debug/Trace Registers (shared with Debug Mode) */
 #define CSR_TSELECT         0x7a0
 #define CSR_TDATA1          0x7a1

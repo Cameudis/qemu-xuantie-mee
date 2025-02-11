@@ -1,3 +1,18 @@
+DEF_HELPER_4(mee_ld8u, tl, env, tl, tl, tl)
+DEF_HELPER_4(mee_ld8s, tl, env, tl, tl, tl)
+DEF_HELPER_4(mee_ld16u, tl, env, tl, tl, tl)
+DEF_HELPER_4(mee_ld16s, tl, env, tl, tl, tl)
+DEF_HELPER_4(mee_ld32u, tl, env, tl, tl, tl)
+DEF_HELPER_4(mee_ld32s, tl, env, tl, tl, tl)
+DEF_HELPER_4(mee_ld64, tl, env, tl, tl, tl)
+
+DEF_HELPER_3(mee_st8, void, env, tl, tl)
+DEF_HELPER_3(mee_st16, void, env, tl, tl)
+DEF_HELPER_3(mee_st32, void, env, tl, tl)
+DEF_HELPER_3(mee_st64, void, env, tl, tl)
+
+DEF_HELPER_3(my_debug, void, env, tl, tl)
+
 /* CSKY trace */
 DEF_HELPER_3(jcount, void, env, tl, i32)
 DEF_HELPER_2(tb_trace, void, env, tl)

@@ -219,19 +219,25 @@ CPU_CONVERT(le, 64, uint64_t)
  * and returns it in a uint64_t.
  */
 
+uint64_t mee_load_ptr(const void *ptr, size_t size);
+void mee_store_ptr(void *ptr, uint64_t val, size_t size);
+
 static inline int ldub_p(const void *ptr)
 {
-    return *(uint8_t *)ptr;
+    // return *(uint8_t *)ptr;
+    return (uint8_t)mee_load_ptr(ptr, 1);
 }
 
 static inline int ldsb_p(const void *ptr)
 {
-    return *(int8_t *)ptr;
+    // return *(int8_t *)ptr;
+    return (int8_t)mee_load_ptr(ptr, 1);
 }
 
 static inline void stb_p(void *ptr, uint8_t v)
 {
-    *(uint8_t *)ptr = v;
+    // *(uint8_t *)ptr = v;
+    mee_store_ptr(ptr, v, 1);
 }
 
 /*
@@ -247,49 +253,57 @@ static inline void stb_p(void *ptr, uint8_t v)
 static inline int lduw_he_p(const void *ptr)
 {
     uint16_t r;
-    __builtin_memcpy(&r, ptr, sizeof(r));
+    // __builtin_memcpy(&r, ptr, sizeof(r));
+    r = (uint16_t)mee_load_ptr(ptr, sizeof(r));
     return r;
 }
 
 static inline int ldsw_he_p(const void *ptr)
 {
     int16_t r;
-    __builtin_memcpy(&r, ptr, sizeof(r));
+    // __builtin_memcpy(&r, ptr, sizeof(r));
+    r = (int16_t)mee_load_ptr(ptr, sizeof(r));
     return r;
 }
 
 static inline void stw_he_p(void *ptr, uint16_t v)
 {
-    __builtin_memcpy(ptr, &v, sizeof(v));
+    // __builtin_memcpy(ptr, &v, sizeof(v));
+    mee_store_ptr(ptr, v, sizeof(v));
 }
 
 static inline void st24_he_p(void *ptr, uint32_t v)
 {
-    __builtin_memcpy(ptr, &v, 3);
+    // __builtin_memcpy(ptr, &v, 3);
+    mee_store_ptr(ptr, v, 3);
 }
 
 static inline int ldl_he_p(const void *ptr)
 {
     int32_t r;
-    __builtin_memcpy(&r, ptr, sizeof(r));
+    // __builtin_memcpy(&r, ptr, sizeof(r));
+    r = (int32_t)mee_load_ptr(ptr, sizeof(r));
     return r;
 }
 
 static inline void stl_he_p(void *ptr, uint32_t v)
 {
-    __builtin_memcpy(ptr, &v, sizeof(v));
+    // __builtin_memcpy(ptr, &v, sizeof(v));
+    mee_store_ptr(ptr, v, sizeof(v));
 }
 
 static inline uint64_t ldq_he_p(const void *ptr)
 {
     uint64_t r;
-    __builtin_memcpy(&r, ptr, sizeof(r));
+    // __builtin_memcpy(&r, ptr, sizeof(r));
+    r = mee_load_ptr(ptr, sizeof(r));
     return r;
 }
 
 static inline void stq_he_p(void *ptr, uint64_t v)
 {
-    __builtin_memcpy(ptr, &v, sizeof(v));
+    // __builtin_memcpy(ptr, &v, sizeof(v));
+    mee_store_ptr(ptr, v, sizeof(v));
 }
 
 static inline int lduw_le_p(const void *ptr)

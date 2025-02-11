@@ -43,6 +43,8 @@
 #include "hw/intc/xt_clic.h"
 #endif
 
+#include "mee.h"
+
 /* RISC-V CPU definitions */
 static const char riscv_single_letter_exts[] = "IEMAFDQCBPVH";
 const uint32_t misa_bits[] = {RVI, RVE, RVM, RVA, RVF, RVD, RVV,
@@ -543,6 +545,7 @@ static void rv64_base_cpu_init(Object *obj)
 #ifndef CONFIG_USER_ONLY
     set_satp_mode_max_supported(RISCV_CPU(obj), VM_1_10_SV57);
 #endif
+    init_mee();
 }
 
 static void rv64_sifive_u_cpu_init(Object *obj)
