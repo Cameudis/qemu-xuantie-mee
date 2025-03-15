@@ -31,7 +31,7 @@
 #include "mee.h"
 
 // #define MEE_OFF
-// #define MEE_DEBUG
+#define MEE_DEBUG
 // #define PAT_DEBUG
 
 /* BASICs */
@@ -40,7 +40,6 @@
 #define CACHE_LINE_SIZE (1<<CACHE_LINE_LOG2)
 #define CACHE_LINE_MASK (CACHE_LINE_SIZE - 1)
 
-static bool *bitmap = NULL;
 const uint64_t PA_BASE = 0x80000000;
 uint64_t PA_END;
 
@@ -59,6 +58,9 @@ static Block tweak_keys[32];
 #define PAT_LEVELS 4  // Number of levels in the PAT
 #define PAT_BLOCK_SIZE CACHE_LINE_SIZE
 #define PAT_CHILDREN_PER_NODE 8  // Number of children per node
+#define PAT_N_INIT 1  // Initial value of the PAT
+
+static uint64_t *pat_vers = NULL;
 
 static __attribute__ ((hot)) void apply_tweak(uint8_t *buf, uint64_t pa)
 {
@@ -81,26 +83,94 @@ static void debug_print(const char *msg, uint64_t pa, uint64_t val[])
 #endif
 }
 
+#define TAPS 0x180000C00000001ULL
+
+static uint64_t increment_counter(uint64_t counter) {
+    uint64_t msb = (counter >> 55) & 1;
+    uint64_t shifted = counter << 1;
+    if (msb) {
+        shifted ^= TAPS;
+    }
+    return shifted;
+}
+
+static void init_pat_vers(size_t size)
+{
+  pat_vers = calloc(size / CACHE_LINE_SIZE, sizeof(*pat_vers));
+  assert(pat_vers);
+  PA_END = PA_BASE + size;
+
+  for (size_t i = 0; i < size / CACHE_LINE_SIZE; ++i) {
+    pat_vers[i] = PAT_N_INIT;
+  }
+  
+#ifdef MEE_DEBUG
+  fprintf(stderr, "PAT initialized.\n");
+#endif
+}
+
+/* verify PAT and get the related ver */
+static uint64_t get_pat_ver(uint64_t pa, bool *success)
+{
+  uint64_t off = pa - PA_BASE;
+  uint64_t ver = pat_vers[off >> CACHE_LINE_LOG2];
+  *success = true;
+  return ver;
+}
+/* update PAT */
+static uint64_t update_pat_ver(uint64_t pa)
+{
+  uint64_t off = pa - PA_BASE;
+  return pat_vers[off >> CACHE_LINE_LOG2] = increment_counter(pat_vers[off >> CACHE_LINE_LOG2]);
+}
+
+static bool verify_mac(uint8_t *data, uint64_t pa, uint64_t ver)
+{
+  if (ver == PAT_N_INIT) return true;
+  return true;
+}
+static void update_mac(uint8_t *data, uint64_t pa, uint64_t ver)
+{
+  return;
+}
+
 static void decrypt_block(uint8_t *dest, uint8_t *src, uint64_t pa)
 {
-  if (bitmap[(pa-PA_BASE) >> CACHE_LINE_LOG2]) {
+  bool success = false;
+
+  uint64_t ver = get_pat_ver(pa, &success);
+
+  if (!success) goto verify_failed;
+  if (!verify_mac(src, pa, ver)) goto verify_failed;
+  
+  if (ver != PAT_N_INIT) { // PAT verification passed, decrypt
+    // TODO
     AES_decrypt(src, dest, &dec_key);
     apply_tweak(dest, pa);
     debug_print("d", pa, (uint64_t*)dest);
-  } else {
+  } else { // PAT verification passed, but ver is n_init
     memcpy(dest, src, CACHE_LINE_SIZE);
-    return;
   }
+
+  return;
+
+verify_failed:
+  assert(0);
 }
 
 static void encrypt_block(uint8_t *dest, uint8_t *src, uint64_t pa)
 {
   uint8_t tmp_buf[CACHE_LINE_SIZE];
   debug_print("e", pa, (uint64_t*)src);
-  bitmap[(pa-PA_BASE) >> CACHE_LINE_LOG2] = 1;
+  
+  uint64_t ver = update_pat_ver(pa);
+
+  // TODO
   memcpy(tmp_buf, src, sizeof(tmp_buf));
   apply_tweak(tmp_buf, pa);
   AES_encrypt(tmp_buf, dest, &enc_key);
+
+  update_mac(dest, pa, ver);
 }
 
 void init_mee(void)
@@ -165,7 +235,7 @@ uint64_t mee_load_ptr(const void *ptr, size_t sz)
   if (!mr || mr->addr != PA_BASE || is_exc(pa)) {
     return any_load_ptr(ptr_nc, pa, sz);
   } else {
-    if (!bitmap) { bitmap = calloc(mr->size / CACHE_LINE_SIZE, sizeof(*bitmap)); PA_END = PA_BASE + mr->size; }
+    if (!pat_vers) init_pat_vers(mr->size);
     return ram_load_ptr(ptr_nc, pa, sz);
   }
 }
@@ -176,7 +246,7 @@ uint64_t mee_load_pa(CPURISCVState *env, ram_addr_t pa, size_t sz)
   uint8_t buf[CACHE_LINE_SIZE] = {};
 
   MemoryRegion *mr = cs->memory;
-  if (!bitmap) { bitmap = calloc(mr->size / CACHE_LINE_SIZE, sizeof(*bitmap)); PA_END = PA_BASE + mr->size; }
+  if (!pat_vers) init_pat_vers(mr->size);
 
   if (pa < PA_BASE || pa >= PA_END || is_exc(pa)) {
     address_space_read(cs->as, pa, MEMTXATTRS_UNSPECIFIED, buf, sz);
@@ -224,7 +294,7 @@ void mee_store_ptr(void *ptr, uint64_t val, size_t sz)
   if (!mr || mr->addr != PA_BASE || is_exc(pa)) {
     any_store_ptr(ptr, pa, val, sz);
   } else {
-    if (!bitmap) { bitmap = calloc(mr->size / CACHE_LINE_SIZE, sizeof(*bitmap)); PA_END = PA_BASE + mr->size; }
+    if (!pat_vers) init_pat_vers(mr->size);
     ram_store_ptr(ptr, pa, val, sz);
   }
 }
@@ -235,7 +305,7 @@ void mee_store_pa(CPURISCVState *env, ram_addr_t pa, uint64_t val, size_t sz)
   uint8_t buf[CACHE_LINE_SIZE] = {};
 
   MemoryRegion *mr = cs->memory;
-  if (!bitmap) { bitmap = calloc(mr->size / CACHE_LINE_SIZE, sizeof(*bitmap)); PA_END = PA_BASE + mr->size; }
+  if (!pat_vers) init_pat_vers(mr->size);
 
   if (pa < PA_BASE || pa >= PA_END || is_exc(pa)) {
     address_space_write(cs->as, pa, MEMTXATTRS_UNSPECIFIED, &val, sz);
