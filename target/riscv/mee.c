@@ -169,7 +169,7 @@ static uint64_t calc_MAC(uint64_t *child, uint64_t parent, uint64_t pa) {
     uint8_t nonce[CACHE_LINE_SIZE] = {};
     uint8_t encrypted[CACHE_LINE_SIZE] = {};
 
-    *((uint64_t *)nonce) = parent;
+    ((uint64_t *)nonce)[0] = parent;
     ((uint64_t *)nonce)[1] = pa;
     AES_encrypt(nonce, encrypted, &enc_key);
 
@@ -189,18 +189,19 @@ static bool verify_mac(uint8_t *data, uint64_t pa, uint64_t ver) {
     if (expected_mac != pd_tags[off >> CACHE_LINE_LOG2])
         return false;
 
-    expected_mac = calc_MAC(&pat_vers[align(off >> CACHE_LINE_LOG2)], pat_layout[0].counter[get_pat_pos(0, off)], pa);
+    expected_mac = calc_MAC(&pat_vers[align(off >> CACHE_LINE_LOG2)], pat_layout[0].counter[get_pat_pos(0, off)], pa & ~((1<<(CACHE_LINE_LOG2+PAT_CHILDREN_PER_NODE_LOG2))-1));
     if (expected_mac != pat_layout[0].tag[get_pat_pos(0, off)]) {
-        fprintf(stderr, "pa: 0x%lx, off: 0x%lx\n", pa, off);
+        fprintf(stderr, "pa: 0x%lx, off: 0x%lx\n", pa & ~((1<<(CACHE_LINE_LOG2+PAT_CHILDREN_PER_NODE_LOG2))-1), off);
+        fprintf(stderr, "pat_vers[align(off >> CACHE_LINE_LOG2)]: 0x%lx_%lx, pat_layout[0].counter[get_pat_pos(0, off)]: 0x%lx\n", pat_vers[align(off >> CACHE_LINE_LOG2)], pat_vers[align(off >> CACHE_LINE_LOG2)+1], pat_layout[0].counter[get_pat_pos(0, off)]);
         fprintf(stderr, "expected_mac: 0x%lx, pat_layout[0].tag[get_pat_pos(0, off)]: 0x%lx\n", expected_mac, pat_layout[0].tag[get_pat_pos(0, off)]);
+        debug_print("v", pa, (uint64_t *)data);
         return false;
     }
     for (size_t i = 1; i < PAT_LEVELS; ++i) {
-        expected_mac = calc_MAC(&pat_layout[i - 1].counter[align(get_pat_pos(i - 1, off))], pat_layout[i].counter[get_pat_pos(i, off)], pa);
+        expected_mac = calc_MAC(&pat_layout[i - 1].counter[align(get_pat_pos(i - 1, off))], pat_layout[i].counter[get_pat_pos(i, off)], 0);
         if (expected_mac != pat_layout[i].tag[get_pat_pos(i, off)])
             return false;
     }
-    fprintf(stderr, "MAC verification passed.\n");
     return true;
 }
 
@@ -216,9 +217,9 @@ static void update_mac(uint8_t *data, uint64_t pa, uint64_t ver) {
     for (size_t i = 0; i < PAT_LEVELS; ++i)
         update_counter(i, pa);
 
-    pat_layout[0].tag[get_pat_pos(0, off)] = calc_MAC(&pat_vers[align(off >> CACHE_LINE_LOG2)], pat_layout[0].counter[get_pat_pos(0, off)], pa);
+    pat_layout[0].tag[get_pat_pos(0, off)] = calc_MAC(&pat_vers[align(off >> CACHE_LINE_LOG2)], pat_layout[0].counter[get_pat_pos(0, off)], pa & ~((1<<(CACHE_LINE_LOG2+PAT_CHILDREN_PER_NODE_LOG2))-1));
     for (size_t i = 1; i < PAT_LEVELS; ++i)
-        pat_layout[i].tag[get_pat_pos(i, off)] = calc_MAC(&pat_layout[i - 1].counter[align(get_pat_pos(i - 1, off))], pat_layout[i].counter[get_pat_pos(i, off)], pa);
+        pat_layout[i].tag[get_pat_pos(i, off)] = calc_MAC(&pat_layout[i - 1].counter[align(get_pat_pos(i - 1, off))], pat_layout[i].counter[get_pat_pos(i, off)], 0);
     return;
 }
 
