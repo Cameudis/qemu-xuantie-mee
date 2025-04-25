@@ -36,16 +36,18 @@
 
 /* BASICs */
 
-#define CACHE_LINE_LOG2 6
-#define CACHE_LINE_SIZE (1 << CACHE_LINE_LOG2)
+#define CACHE_LINE_LOG2 6 // Number of bits of the size of the cache line in bytes
+#define CACHE_LINE_SIZE (1 << CACHE_LINE_LOG2) // Size of the cache line in bytes
 #define CACHE_LINE_MASK (CACHE_LINE_SIZE - 1)
-#define AES_BLOCK_SIZE 16
-#define AES_BLOCK_NUM (CACHE_LINE_SIZE / AES_BLOCK_SIZE)
-#define MAC_BLOCK_NUM_LOG2 3
-#define MAC_BLOCK_NUM (1 << MAC_BLOCK_NUM_LOG2)
+#define AES_BLOCK_SIZE 16 // Size of the AES block in bytes
+#define AES_BLOCK_NUM (CACHE_LINE_SIZE / AES_BLOCK_SIZE) // Number of AES blocks in a cache line
+#define MAC_BLOCK_NUM_LOG2 3 // Number of bits of the number of MAC segments
+#define MAC_BLOCK_NUM (1 << MAC_BLOCK_NUM_LOG2) // The number of MAC segments (8 bytes per segment)
 
 // x^64 + x^4 + x^3 + x + 1
 #define POLY 0x1B
+#define UINT64_MSB (1ULL << 63)
+#define TRUNC56_MASK ((1ULL << 56) - 1)
 
 const uint64_t PA_BASE = 0x80000000;
 uint64_t PA_END;
@@ -61,23 +63,26 @@ typedef uint8_t Block __attribute__((vector_size(16)));
 // tweak_keys[Tweak index] = key
 // static Block tweak_keys[32];
 
-// PAT related structures
 #define PAT_LEVELS 4 // Number of levels in the PAT
-#define PAT_BLOCK_SIZE CACHE_LINE_SIZE
-#define PAT_CHILDREN_PER_NODE_LOG2 MAC_BLOCK_NUM_LOG2
+#define PAT_BLOCK_SIZE CACHE_LINE_SIZE // Size of the pat block in bytes
+#define PAT_CHILDREN_PER_NODE_LOG2 MAC_BLOCK_NUM_LOG2 // Number of bits of the number of children per node
 #define PAT_CHILDREN_PER_NODE MAC_BLOCK_NUM  // Number of children per node
 #define PAT_CHILDREN_MASK (PAT_CHILDREN_PER_NODE - 1)
 #define PAT_N_INIT 1 // Initial value of the PAT
-#define align(addr) (addr & (~PAT_CHILDREN_MASK))
+#define align(addr) (addr & (~PAT_CHILDREN_MASK)) // Align the address
 
+// contains the tag and counter of each level
 typedef struct {
     uint64_t *tag;
     uint64_t *counter;
 } PAT_LEVEL;
 
+// counters of the actual memory
 static uint64_t *pat_vers = NULL;
-static PAT_LEVEL pat_layout[PAT_LEVELS] = {};
+// tags of the actual memory
 static uint64_t *pd_tags = NULL;
+// counters and tags on the tree
+static PAT_LEVEL pat_layout[PAT_LEVELS] = {};
 
 /*
 static __attribute__((hot)) void apply_tweak(uint8_t *buf, uint64_t pa) {
@@ -110,120 +115,156 @@ static uint64_t increment_counter(uint64_t counter) {
     }
     return shifted;
 }
-
+/* initialize pat related structures */
 static void init_pat_vers(size_t size) {
     pat_vers = calloc(size / CACHE_LINE_SIZE, sizeof(*pat_vers));
     pd_tags = calloc(size / CACHE_LINE_SIZE, sizeof(*pd_tags));
 
-    for (size_t i = 0; i < PAT_LEVELS; ++i) {
-        pat_layout[i].tag = calloc(size >> (CACHE_LINE_LOG2 + (i + 1) * PAT_CHILDREN_PER_NODE_LOG2), sizeof(*(pat_layout[i].tag)));
-        pat_layout[i].counter = calloc(size >> (CACHE_LINE_LOG2 + (i + 1) * PAT_CHILDREN_PER_NODE_LOG2), sizeof(*(pat_layout[i].counter)));
+    if (!pat_vers || !pd_tags) {
+        fprintf(stderr, "Failed to allocate memory for PAT versions\n");
+        exit(EXIT_FAILURE);
     }
 
-    PA_END = PA_BASE + size;
-
+    // Initialize the PAT versions
     for (size_t i = 0; i < size / CACHE_LINE_SIZE; ++i) {
         pat_vers[i] = PAT_N_INIT;
     }
 
     for (size_t i = 0; i < PAT_LEVELS; ++i) {
-        for (size_t j = 0; j < (size >> (CACHE_LINE_LOG2 + (i + 1) * PAT_CHILDREN_PER_NODE_LOG2)); ++j)
+        // Number of members in the current level
+        size_t num_members = size >> (CACHE_LINE_LOG2 + (i + 1) * PAT_CHILDREN_PER_NODE_LOG2);
+
+        pat_layout[i].tag = calloc(num_members, sizeof(*(pat_layout[i].tag)));
+        pat_layout[i].counter = calloc(num_members, sizeof(*(pat_layout[i].counter)));
+
+        if (!pat_layout[i].tag || !pat_layout[i].counter) {
+            fprintf(stderr, "Failed to allocate memory for PAT layout\n");
+            exit(EXIT_FAILURE);
+        }
+
+        // Initialize counters
+        for (size_t j = 0; j < num_members; ++j) {
             pat_layout[i].counter[j] = PAT_N_INIT;
+        }
     }
+
+    PA_END = PA_BASE + size;
 
 #ifdef MEE_DEBUG
     fprintf(stderr, "PAT initialized.\n");
 #endif
 }
 
-/* verify PAT and get the related ver */
-static uint64_t get_pat_ver(uint64_t pa, bool *success) {
+/* get the version of a cache line */
+static uint64_t get_pat_ver(uint64_t pa) {
     uint64_t off = pa - PA_BASE;
     uint64_t ver = pat_vers[off >> CACHE_LINE_LOG2];
-    *success = true;
     return ver;
 }
-/* update PAT */
+/* update the version of a cache line */
 static uint64_t update_pat_ver(uint64_t pa) {
     uint64_t off = pa - PA_BASE;
     return pat_vers[off >> CACHE_LINE_LOG2] = increment_counter(pat_vers[off >> CACHE_LINE_LOG2]);
 }
-
+/* get the corresponding level subscript by the offset of the cache line */
 static uint64_t get_pat_pos(size_t level, uint64_t off) {
-    return off >> (CACHE_LINE_LOG2 + (level + 1) * PAT_CHILDREN_PER_NODE_LOG2);
+    return off >> ((level + 1) * PAT_CHILDREN_PER_NODE_LOG2);
 }
-
+/* GF Multiplication */
 static uint64_t mult_GF(uint64_t a, uint64_t b) {
     uint64_t result = 0;
     for (int i = 0; i < 64; ++i) {
         if (b & 1)
             result ^= a;
         a <<= 1;
-        if (a & (1ULL << 63))
+        if (a & UINT64_MSB)
             a ^= POLY;
         b >>= 1;
     }
     return result;
 }
-
-static uint64_t calc_MAC(uint64_t *child, uint64_t parent, uint64_t pa) {
+/* generate MAC based on the content, the parent counter and physical address */
+static uint64_t calc_MAC(uint64_t *children, uint64_t parent, uint64_t pa) {
     uint8_t nonce[AES_BLOCK_SIZE] = {};
     uint8_t encrypted[AES_BLOCK_SIZE] = {};
 
+    // Set the nonce based on the counter and physical address and encrypt it
     ((uint64_t *)nonce)[0] = parent;
     ((uint64_t *)nonce)[1] = pa;
     AES_encrypt(nonce, encrypted, &enc_key);
 
+    // Take the lower half of the encrypted block and XOR it with the MAC segments
     uint64_t result = *((uint64_t *)encrypted);
     for (size_t i = 0; i < MAC_BLOCK_NUM; ++i)
-        result ^= mult_GF(hash_key[i], child[i]);
-    return result & ((1ULL << 56) - 1);
-}
+        result ^= mult_GF(hash_key[i], children[i]);
 
+    // Truncate to 56 bits
+    return result & TRUNC56_MASK;
+}
+/* verify if the MACs on the tree are as expected (skip if the cache line has not been touched) */
 static bool verify_mac(uint8_t *data, uint64_t pa, uint64_t ver) {
+    // skip the verification if the cache line has not been touched
     if (ver == PAT_N_INIT)
         return true;
 
-    uint64_t off = pa - PA_BASE;
+    // offset of the cache line
+    uint64_t off = (pa - PA_BASE) >> CACHE_LINE_LOG2;
+    // the expected MAC value
     uint64_t expected_mac = calc_MAC((uint64_t *)data, ver, pa);
 
-    if (expected_mac != pd_tags[off >> CACHE_LINE_LOG2])
+    // verify the level that is not on the tree
+    if (expected_mac != pd_tags[off])
         return false;
 
-    expected_mac = calc_MAC(&pat_vers[align(off >> CACHE_LINE_LOG2)], pat_layout[0].counter[get_pat_pos(0, off)], pa & ~((1 << (CACHE_LINE_LOG2 + PAT_CHILDREN_PER_NODE_LOG2)) - 1));
-    if (expected_mac != pat_layout[0].tag[get_pat_pos(0, off)]) {
-        fprintf(stderr, "pa: 0x%lx, off: 0x%lx\n", pa & ~((1<<(CACHE_LINE_LOG2+PAT_CHILDREN_PER_NODE_LOG2))-1), off);
-        fprintf(stderr, "pat_vers[align(off >> CACHE_LINE_LOG2)]: 0x%lx_%lx, pat_layout[0].counter[get_pat_pos(0, off)]: 0x%lx\n", pat_vers[align(off >> CACHE_LINE_LOG2)], pat_vers[align(off >> CACHE_LINE_LOG2)+1], pat_layout[0].counter[get_pat_pos(0, off)]);
-        fprintf(stderr, "expected_mac: 0x%lx, pat_layout[0].tag[get_pat_pos(0, off)]: 0x%lx\n", expected_mac, pat_layout[0].tag[get_pat_pos(0, off)]);
-        debug_print("v", pa, (uint64_t *)data);
+    // the subscript of the first child
+    uint64_t pos_children = align(off);
+    // the corresponding parent subscript
+    uint64_t pos_parent = get_pat_pos(0, off);
+
+    // verify the on-tree levels
+    expected_mac = calc_MAC(&pat_vers[pos_children], pat_layout[0].counter[pos_parent], pos_children);
+    if (expected_mac != pat_layout[0].tag[pos_parent]) {
+        // fprintf(stderr, "pa: 0x%lx, off: 0x%lx\n", pa & ~((1<<(CACHE_LINE_LOG2+PAT_CHILDREN_PER_NODE_LOG2))-1), off);
+        // fprintf(stderr, "pat_vers[align(off >> CACHE_LINE_LOG2)]: 0x%lx_%lx, pat_layout[0].counter[get_pat_pos(0, off)]: 0x%lx\n", pat_vers[align(off >> CACHE_LINE_LOG2)], pat_vers[align(off >> CACHE_LINE_LOG2)+1], pat_layout[0].counter[get_pat_pos(0, off)]);
+        // fprintf(stderr, "expected_mac: 0x%lx, pat_layout[0].tag[get_pat_pos(0, off)]: 0x%lx\n", expected_mac, pat_layout[0].tag[get_pat_pos(0, off)]);
+        // debug_print("v", pa, (uint64_t *)data);
         return false;
     }
     for (size_t i = 1; i < PAT_LEVELS; ++i) {
-        uint64_t pos_children = align(get_pat_pos(i - 1, off));
-        uint64_t pos_parent = get_pat_pos(i, off);
+        pos_children = align(pos_parent);
+        pos_parent = get_pat_pos(i, off);
         expected_mac = calc_MAC(&pat_layout[i - 1].counter[pos_children], pat_layout[i].counter[pos_parent], pos_children);
         if (expected_mac != pat_layout[i].tag[pos_parent])
             return false;
     }
     return true;
 }
-
-static uint64_t update_counter(size_t level, uint64_t pa) {
-    uint64_t off = pa - PA_BASE;
-    uint64_t pos = get_pat_pos(level, off);
-    return pat_layout[level].counter[pos] = increment_counter(pat_layout[level].counter[pos]);
-}
-
+// /* update a counter */
+// static uint64_t update_counter(size_t level, uint64_t pa) {
+//     uint64_t off = (pa - PA_BASE) >> CACHE_LINE_LOG2;
+//     uint64_t pos = get_pat_pos(level, off);
+//     return pat_layout[level].counter[pos] = increment_counter(pat_layout[level].counter[pos]);
+// }
+/* update MAC tags */
 static void update_mac(uint8_t *data, uint64_t pa, uint64_t ver) {
-    uint64_t off = pa - PA_BASE;
-    pd_tags[off >> CACHE_LINE_LOG2] = calc_MAC((uint64_t *)data, ver, pa);
-    for (size_t i = 0; i < PAT_LEVELS; ++i)
-        update_counter(i, pa);
+    // offset of the cache line
+    uint64_t off = (pa - PA_BASE) >> CACHE_LINE_LOG2;
 
-    pat_layout[0].tag[get_pat_pos(0, off)] = calc_MAC(&pat_vers[align(off >> CACHE_LINE_LOG2)], pat_layout[0].counter[get_pat_pos(0, off)], pa & ~((1 << (CACHE_LINE_LOG2 + PAT_CHILDREN_PER_NODE_LOG2)) - 1));
+    // update the level that is not on the tree
+    pd_tags[off] = calc_MAC((uint64_t *)data, ver, pa);
+
+    // the subscript of the first child
+    uint64_t pos_children = align(off);
+    // the corresponding parent subscript
+    uint64_t pos_parent = get_pat_pos(0, off);
+    // update parent counter
+    pat_layout[0].counter[pos_parent] = increment_counter(pat_layout[0].counter[pos_parent]);
+    // update parent MAC tag
+    pat_layout[0].tag[pos_parent] = calc_MAC(&pat_vers[pos_children], pat_layout[0].counter[pos_parent], pos_children);
     for (size_t i = 1; i < PAT_LEVELS; ++i) {
-        uint64_t pos_children = align(get_pat_pos(i - 1, off));
-        uint64_t pos_parent = get_pat_pos(i, off);
+        pos_children = align(pos_parent);
+        pos_parent = get_pat_pos(i, off);
+        pat_layout[i].counter[pos_parent] = increment_counter(pat_layout[i].counter[pos_parent]);
         pat_layout[i].tag[pos_parent] = calc_MAC(&pat_layout[i - 1].counter[pos_children], pat_layout[i].counter[pos_parent], pos_children);
     }
     return;
@@ -242,23 +283,21 @@ static void process_block(uint8_t *dest, uint8_t *src, uint64_t pa, uint64_t ver
     // debug_print("d", pa, (uint64_t *)dest);
     return;
 }
-
+/* AES CTR decrypt with a tweaked counter value (with MAC verification) */
 static void decrypt_CTR(uint8_t *dest, uint8_t *src, uint64_t pa) {
-    bool success = false;
-
-    uint64_t ver = get_pat_ver(pa, &success);
-
-    if (!success)
-        goto verify_failed;
+    // MAC verification
+    uint64_t ver = get_pat_ver(pa);
     if (!verify_mac(src, pa, ver))
         goto verify_failed;
 
     if (ver != PAT_N_INIT) { // PAT verification passed, decrypt
-        // TODO
-        for (size_t i = 0; i < AES_BLOCK_NUM; ++i) {
-            process_block(dest + i * AES_BLOCK_SIZE, src + i * AES_BLOCK_SIZE, pa + i * AES_BLOCK_SIZE, ver);
-        }
         debug_print("d", pa, (uint64_t *)dest);
+        for (size_t i = 0; i < AES_BLOCK_NUM; ++i) {
+            process_block(dest, src, pa, ver);
+            dest += AES_BLOCK_SIZE;
+            src += AES_BLOCK_SIZE;
+            pa += AES_BLOCK_SIZE;
+        }
     } else { // PAT verification passed, but ver is n_init
         memcpy(dest, src, CACHE_LINE_SIZE);
     }
@@ -268,18 +307,21 @@ static void decrypt_CTR(uint8_t *dest, uint8_t *src, uint64_t pa) {
 verify_failed:
     assert(0);
 }
-
+/* AES CTR encrypt with a tweaked counter value (with MAC update) */
 static void encrypt_CTR(uint8_t *dest, uint8_t *src, uint64_t pa) {
     uint64_t ver = update_pat_ver(pa);
-    // TODO
     for (size_t i = 0; i < AES_BLOCK_NUM; ++i) {
-        process_block(dest + i * AES_BLOCK_SIZE, src + i * AES_BLOCK_SIZE, pa + i * AES_BLOCK_SIZE, ver);
+        process_block(dest, src, pa, ver);
+        dest += AES_BLOCK_SIZE;
+        src += AES_BLOCK_SIZE;
+        pa += AES_BLOCK_SIZE;
     }
-    update_mac(dest, pa, ver);
+    update_mac(dest - AES_BLOCK_NUM * AES_BLOCK_SIZE, pa - AES_BLOCK_NUM * AES_BLOCK_SIZE, ver);
 }
-
+/* initialize keys in MEE */
 void init_mee(void) {
     unsigned char key_buf[16];
+    // Generate a random key for AES encryption
     if (sizeof(key_buf) != (size_t)getrandom(key_buf, sizeof(key_buf), GRND_RANDOM)) {
         abort();
     }
@@ -290,6 +332,7 @@ void init_mee(void) {
         abort();
     }
     */
+    // Generate a random key for MAC
     if (sizeof(hash_key) != (size_t)getrandom(hash_key, sizeof(hash_key), GRND_RANDOM)) {
         abort();
     }
